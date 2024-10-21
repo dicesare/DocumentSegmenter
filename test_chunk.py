@@ -312,6 +312,26 @@ class DocumentSegmenter:
 
         print(f"Segments have been saved in hierarchical JSON format at {output_json_path}")
 
+    def _save_segments(self, output_chunk_name):
+        """
+        Generic save method to select the appropriate save method based on the format.
+        :param output_chunk_name: The name of the output file (without extension).
+        """
+        # Define a mapping between the format and the corresponding method
+        save_methods = {
+            'csv': self._save_segments_to_csv,
+            'json': self._save_segments_to_hierarchical_json,
+        }
+
+        # Select the appropriate save method
+        save_method = save_methods.get(self.save_format)
+
+        if save_method is None:
+            raise ValueError(f"Unsupported save format: {self.save_format}")
+
+        # Call the selected save method
+        save_method(output_chunk_name)
+
     def process(self):
         """
         The main process for segmenting the document and saving the results into a CSV file.
@@ -323,19 +343,18 @@ class DocumentSegmenter:
 
             # Generate the CSV file name based on the original file name and current timestamp
             base_filename = os.path.splitext(os.path.basename(self.file_path))[0]
-            output_chunk_save = f"{base_filename}_chunk_{datetime.today().strftime('%Y_%m_%d_%H_%M_%S')}.{self.save_format}"
-            # Since switch case select the output format to save the segmented content in the CSV or JSON file
-            match self.save_format:
-                case 'csv':
-                    self._save_segments_to_csv(output_chunk_save)
-                case 'json':
-                    self._save_segments_to_hierarchical_json(output_chunk_save)
-                case _:
-                    raise ValueError(f"Unsupported save format: {self.save_format}")
 
-            print(f"Segments have been saved in {os.path.join(self.output_dir, output_chunk_save)}")
+            # Generate the output file name based on the original file name and current timestamp
+            output_chunk_create_name = f"{base_filename}_chunk_{datetime.today().strftime('%Y_%m_%d_%H_%M_%S')}.{self.save_format}"
+
+            # Save the segments to the appropriate format (CSV or JSON)
+            self._save_segments(output_chunk_name=output_chunk_create_name)
+            print(f"Segments have been saved in {os.path.join(self.output_dir, output_chunk_create_name)}")
+
         except ValueError as e:
             print(f"Processing error: {e}")
+
+
 
 # Utilisation de la classe
 if __name__ == "__main__":
