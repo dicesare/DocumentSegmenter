@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 from docx import Document
 from datetime import datetime
 import pymupdf4llm as pymu  # Library to handle PDF extraction
@@ -36,21 +37,42 @@ class DocumentSegmenter:
     file_path = r'data/original/your_document_to_chunk.pdf' or document.docx  # Replace with your file path
     output_dir = 'data/chunk'  # Folder to save the CSV file; the folder will be created if it doesn't exist
     """
+    def __init__(self, file_path, output_dir, save_format='csv'):
 
-    def __init__(self, file_path, output_dir):
-        self.file_path = file_path
-        self.segments = []
-        self.file_extension = os.path.splitext(file_path)[1].lower()
+        # Validate the save format (only 'csv' or 'json' are allowed)
+        if save_format.lower() not in ['csv', 'json']:
+            raise ValueError(f"Unsupported save format: {save_format}")
+        self.save_format = save_format.lower()
+
+        # Ensure the directory of the file to chunk exists
+        directory_path = os.path.dirname(file_path)
+        self._ensure_directory_exists(directory_path)
+
+        # Ensure the output directory exists
+        self._ensure_directory_exists(output_dir)
         self.output_dir = output_dir
+        
+        # Check if the input file exists after creating the directory (if necessary)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"The file {file_path} does not exist.")
+        self.file_path = file_path
+        
+        # Determine the file extension and initialize segments list
+        self.file_extension = os.path.splitext(file_path)[-1].lower()
+        self.segments = []
 
-        # Ensure the output directory exists, otherwise create it
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-            print(f"Output directory created: {self.output_dir}")
+    def _ensure_directory_exists(self, directory_path):
+        """
+        Ensures that a directory exists, creating it if necessary.
+        :param directory_path: The path to the directory that needs to be checked/created
+        """
+        if not os.path.exists(directory_path):
+            os.makedirs(directory_path)
+            print(f"Directory created: {directory_path}")
         else:
-            print(f"Output directory already exists: {self.output_dir}")
+            print(f"Directory already exists: {directory_path}")
 
-    def load_document(self):
+    def _load_document(self):
         """
         Loads the document based on its file type (DOCX, PDF, TXT) and returns its content as plain text or Markdown.
 
@@ -99,20 +121,75 @@ class DocumentSegmenter:
         with open(self.file_path, 'r', encoding='utf-8') as file:
             return file.read()
 
-    def segment_document(self):
+    def _segment_document(self):
         """
         Segments the loaded document based on text styles and content type (title, subtitle, paragraph).
         The segmentation is determined differently for DOCX, PDF, and TXT.
         """
-        text = self.load_document()
+        text = self._load_document()
         if text is None:
             raise ValueError("Unable to load the document content.")
 
         # Call appropriate segmentation method based on file extension
         if self.file_extension == '.docx':
             self._segment_docx(text)
+        elif self.file_extension == '.pdf':
+            self._segment_pdf(text)
         else:
-            self._segment_plain_text(text)  # Default segmentation for PDF and TXT
+            self._segment_plain_text(text)  # Default segmentation for TXT
+
+    def _segment_pdf(self, markdown_text):
+        """
+        Segments a PDF document that has been converted to Markdown by detecting titles, subtitles, and paragraphs.
+
+        This method uses Markdown symbols (#, ##, etc.) to identify different levels of headings and segments the content accordingly.
+
+        :param markdown_text: The Markdown text extracted from the PDF
+        """
+        current_segment_type = "paragraph"
+        current_importance = 1.0
+        current_text = ""
+
+        # Iterate through each line of the markdown text
+        for line in markdown_text.splitlines():
+            line = line.strip()  # Remove leading/trailing whitespace
+
+            if not line:  # Skip empty lines
+                continue
+
+            # Detect titles based on the Markdown heading symbols (e.g., # for title, ## for subtitle)
+            if line.startswith('#'):
+                # If a paragraph was being built, append it before switching segment type
+                if current_text and current_segment_type == "paragraph":
+                    self.segments.append(Segment(current_text.strip(), current_segment_type, current_importance))
+                    current_text = ""
+
+                # Count the number of '#' to determine heading level
+                level = len(line.split(' ')[0])
+
+                # Set segment type and importance based on heading level
+                if level == 1:
+                    current_segment_type = 'title'
+                    current_importance = 2.0
+                elif level == 2:
+                    current_segment_type = 'subtitle'
+                    current_importance = 1.8
+                else:
+                    current_segment_type = 'subtitle'  # Treat any heading level 3+ as a subtitle
+                    current_importance = 1.6
+
+                # Append the detected title/subtitle to the segments
+                self.segments.append(Segment(line.strip('#').strip(), current_segment_type, current_importance))
+                current_segment_type = "paragraph"  # Reset for the next paragraph
+                current_importance = 1.0
+
+            else:
+                # Collect text for paragraphs
+                current_text += line + " "
+
+        # Add any remaining paragraph text to the segments
+        if current_text.strip():
+            self.segments.append(Segment(current_text.strip(), "paragraph", 1.0))
 
     def _segment_docx(self, text):
         """
@@ -171,18 +248,69 @@ class DocumentSegmenter:
             if paragraph.strip():  # Skip empty lines
                 self.segments.append(Segment(paragraph.strip(), "paragraph", 1.0))
 
-    def save_segments_to_csv(self, output_csv):
+    def _save_segments_to_csv(self, output_chunk_save):
         """
         Saves the detected segments into a CSV file.
 
-        :param output_csv: The name of the output CSV file
+        :param output_chunk_save: The name of the output CSV file
         """
-        output_csv_path = os.path.join(self.output_dir, output_csv)
+        output_csv_path = os.path.join(self.output_dir, output_chunk_save)
         with open(output_csv_path, mode='w', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
             writer.writerow(['Segment Type', 'Importance', 'Text'])
             for segment in self.segments:
                 writer.writerow([segment.segment_type, segment.importance, segment.text])
+
+    def _save_segments_to_hierarchical_json(self, output_chunk_save):
+        """
+        Saves the detected segments into a JSON file with a hierarchical structure (Title -> Subtitles -> Paragraphs).
+
+        :param output_chunk_save: The name of the output JSON file
+        """
+        output_json_path = os.path.join(self.output_dir, output_chunk_save)
+
+        # Initialize the JSON structure
+        json_data = []
+        current_title = None
+        current_subtitle = None
+
+        # Iterate through each segment and build the hierarchy
+        for segment in self.segments:
+            # Use match-case introduced in Python 3.10 for cleaner structure
+            match segment.segment_type:
+                case 'title':
+                    # If it's a title, start a new section
+                    current_title = {
+                        "Title": segment.text,
+                        "Subtitles": []  # Subtitles will be stored here
+                    }
+                    json_data.append(current_title)
+                    current_subtitle = None  # Reset the subtitle for the new title
+
+                case 'subtitle':
+                    # If it's a subtitle, add it under the current title
+                    current_subtitle = {
+                        "Subtitle": segment.text,
+                        "Paragraphs": []  # Paragraphs will be stored under each subtitle
+                    }
+                    if current_title:
+                        current_title["Subtitles"].append(current_subtitle)
+
+                case 'paragraph':
+                    # If it's a paragraph, add it under the current subtitle if it exists, else under the title
+                    if current_subtitle:
+                        current_subtitle["Paragraphs"].append(segment.text)
+                    elif current_title:
+                        # If there's no subtitle, add the paragraph directly under the title
+                        if "Paragraphs" not in current_title:
+                            current_title["Paragraphs"] = []
+                        current_title["Paragraphs"].append(segment.text)
+
+        # Write the structured data to a JSON file
+        with open(output_json_path, 'w', encoding='utf-8') as file:
+            json.dump(json_data, file, ensure_ascii=False, indent=4)
+
+        print(f"Segments have been saved in hierarchical JSON format at {output_json_path}")
 
     def process(self):
         """
@@ -191,21 +319,30 @@ class DocumentSegmenter:
         This function orchestrates the loading, segmenting, and saving of the document.
         """
         try:
-            self.segment_document()
+            self._segment_document()
 
             # Generate the CSV file name based on the original file name and current timestamp
             base_filename = os.path.splitext(os.path.basename(self.file_path))[0]
-            output_csv = f"{base_filename}_chunk_{datetime.today().strftime('%Y_%m_%d_%H_%M_%S')}.csv"
+            output_chunk_save = f"{base_filename}_chunk_{datetime.today().strftime('%Y_%m_%d_%H_%M_%S')}.{self.save_format}"
+            # Since switch case select the output format to save the segmented content in the CSV or JSON file
+            match self.save_format:
+                case 'csv':
+                    self._save_segments_to_csv(output_chunk_save)
+                case 'json':
+                    self._save_segments_to_hierarchical_json(output_chunk_save)
+                case _:
+                    raise ValueError(f"Unsupported save format: {self.save_format}")
 
-            # Save the segmented content to the CSV file
-            self.save_segments_to_csv(output_csv)
-            print(f"Segments have been saved in {os.path.join(self.output_dir, output_csv)}")
+            print(f"Segments have been saved in {os.path.join(self.output_dir, output_chunk_save)}")
         except ValueError as e:
             print(f"Processing error: {e}")
 
 # Utilisation de la classe
 if __name__ == "__main__":
-    file_path = r'data/original/your document.pdf'  # Remplace par le chemin réel vers ton fichier
+    file_path = r'data/original/consultation_TMA_Feg_2024_Lot_3_V1.0.docx'  # Remplace par le chemin réel vers ton fichier
     output_dir = 'data/chunk'  # Chemin vers le dossier où sauvegarder le CSV
-    segmenter = DocumentSegmenter(file_path, output_dir)
+    segmenter = DocumentSegmenter(
+        file_path=file_path,
+        output_dir=output_dir,
+        save_format='json')
     segmenter.process()
