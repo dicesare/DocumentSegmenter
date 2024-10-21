@@ -33,8 +33,8 @@ python script_name.py
 ```python
 # Example of using the DocumentSegmenter to process a file
 file_path = r'data/original/your_document_to_chunk.pdf'  # Replace with your document path
-output_dir = 'data/chunk'  # Folder to save the CSV file
-segmenter = DocumentSegmenter(file_path, output_dir)
+output_dir = 'data/chunk'  # Folder to save the CSV or JSON file
+segmenter = DocumentSegmenter(file_path, output_dir, save_format='csv')  # Change 'csv' to 'json' for JSON output
 segmenter.process()
 ```
 
@@ -47,6 +47,8 @@ segmenter.process()
 
 ## Example Output
 
+### CSV Output
+
 The output CSV file will contain the following columns:
 
 | Segment Type | Importance | Text                             |
@@ -55,6 +57,25 @@ The output CSV file will contain the following columns:
 | paragraph    | 1.0        | Content of the first paragraph   |
 | subtitle     | 1.8        | Subtitle for Section 1           |
 | paragraph    | 1.0        | Content of the paragraph under Section 1 |
+
+### JSON Output
+
+```json
+[
+    {
+        "Title": "Main Title of the Document",
+        "Subtitles": [
+            {
+                "Subtitle": "Subtitle for Section 1",
+                "Paragraphs": [
+                    "Content of the paragraph under Section 1"
+                ]
+            }
+        ],
+        "Paragraphs": []
+    }
+]
+```
 
 ## Contribution
 
